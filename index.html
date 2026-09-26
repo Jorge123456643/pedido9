@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#020107">
+<title>Te Amo Jade — Cosmic Engine FIX</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#020107}
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#hud{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:0 18px calc(7vh + env(safe-area-inset-bottom));color:#fff;text-align:center}
+#title{font-size:clamp(24px,8vw,58px);font-weight:200;line-height:1;letter-spacing:.28em;margin-right:-.28em;text-shadow:0 0 8px #fff,0 0 22px #ff2d6d,0 0 60px #ff0048;opacity:0;transform:translateY(16px);transition:1.5s ease}
+#sub{margin-top:12px;font-size:9px;letter-spacing:.32em;margin-right:-.32em;opacity:0;transition:1.4s .3s ease;color:#ffd9e6}
+.ready #title,.ready #sub{opacity:1;transform:none}
+#hint{position:fixed;top:calc(18px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);padding:8px 12px;border:1px solid #fff2;border-radius:999px;background:#ffffff08;color:#fff9;font-size:9px;letter-spacing:.2em;white-space:nowrap;opacity:0;transition:1s 1.5s}
+.ready #hint{opacity:.7}
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div id="hud"><div id="title">TE AMO JADE</div><div id="sub">ONE UNIVERSE • ONE HEART • INFINITE</div></div>
+<div id="hint">TOQUE • ARRASTE • PINCE</div>
+
+<script>
+(()=>{"use strict";
+
+const canvas=document.getElementById("fx");
+let gl=canvas.getContext("webgl2",{alpha:false,antialias:false,preserveDrawingBuffer:false});
+
+if(!gl){
+  document.body.innerHTML='<div style="color:white;text-align:center;padding:30vh 20px;font:16px system-ui">Seu navegador não suporta WebGL2.</div>';
+  return;
+}
+
+const VS=`#version 300 es
+in vec2 a;
+out vec2 uv;
+void main(){uv=a*.5+.5;gl_Position=vec4(a,0.0,1.0);}
+`;
+
+/*
+  FIX:
+  - removidos loops pesados por pixel
+  - resolução interna limitada no celular
+  - coração calculado por equação aproximada
+  - renderização contínua mesmo após interação
+  - fallback automático de qualidade
+*/
+const FS=`#version 300 es
+precision mediump float;
+
+uniform vec2 R;
+uniform float T;
+uniform vec2 M;
+uniform float Z;
+uniform float MODE;
+uniform float ENERGY;
+out vec4 O;
+
+#define PI 3.14159265359
+#define TAU 6.28318530718
+
+float hash(vec2 p){
+ p=fract(p*vec2(127.1,311.7));
+ p+=dot(p,p+34.5);
+ return fract(p.x*p.y);
+}
+
+float noise(vec2 p){
+ vec2 i=floor(p),f=fract(p);
+ f=f*f*(3.0-2.0*f);
+ float a=hash(i);
+ float b=hash(i+vec2(1.,0.));
+ float c=hash(i+vec2(0.,1.));
+ float d=hash(i+vec2(1.,1.));
+ return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+
+float fbm(vec2 p){
+ float v=0.;
+ v+=noise(p)*.55;
+ p=p*2.02+7.3;
+ v+=noise(p)*.28;
+ p=p*2.01+4.1;
+ v+=noise(p)*.12;
+ return v;
+}
+
+mat2 rot(float a){
+ float s=sin(a),c=cos(a);
+ return mat2(c,-s,s,c);
+}
+
+/* Approximation rápida da borda do coração */
+float heartField(vec2 p){
+ p.y=-p.y;
+ float x=p.x*1.35;
+ float y=p.y*1.35;
+ float q=x*x+y*y-1.0;
+ float f=q*q*q-x*x*y*y*y;
+ return f;
+}
+
+float heartLine(vec2 p){
+ float f=abs(heartField(p));
+ return exp(-f*42.0);
+}
+
+vec3 stars(vec2 p){
+ vec2 g=floor(p*170.0);
+ vec2 f=fract(p*170.0)-.5;
+ float h=hash(g);
+ float d=length(f);
+ float on=step(.991,h);
+ float glow=smoothstep(.055,.0,d);
+ return vec3(1.0,.72,.86)*glow*on;
+}
+
+vec3 galaxy(vec2 p,float t){
+ float r=length(p);
+ float a=atan(p.y,p.x);
+
+ float disk=exp(-r*r*3.0);
+ float core=exp(-r*r*20.0);
+
+ float arms=0.;
+ for(int k=0;k<5;k++){
+   float q=a-float(k)*TAU/5.0-r*4.0-t*.025;
+   arms+=pow(max(0.,cos(q)),18.0);
+ }
+ arms/=5.0;
+
+ float dust=fbm(p*3.0+vec2(t*.006,-t*.004));
+ float density=disk*(.07+arms*1.15)*(.5+dust*.65);
+
+ vec3 c=mix(vec3(.22,.015,.28),vec3(1.,.025,.14),smoothstep(.05,.9,r));
+ c=mix(c,vec3(1.,.68,.28),core);
+
+ return c*density+vec3(1.,.35,.08)*core*1.4;
+}
+
+vec3 core(vec2 p,float t){
+ float r=length(p);
+ float ring=exp(-pow((r-.105)/.019,2.0));
+ float ring2=exp(-pow((r-.16)/.045,2.0));
+ float a=atan(p.y,p.x);
+ float swirl=.55+.45*sin(a*16.-r*55.+t*1.7);
+ float hole=1.-smoothstep(.07,.052,r);
+ return (vec3(1.,.09,.02)*ring*swirl+
+         vec3(1.,.5,.12)*ring2*.18)*hole;
+}
+
+void main(){
+ vec2 p=(gl_FragCoord.xy-.5*R)/min(R.x,R.y);
+ p.y=-p.y;
+ p=(p-M*.045)*Z;
+ p=rot(T*.01)*p;
+
+ vec3 c=vec3(.003,.001,.007);
+
+ float neb=fbm(p*2.0+T*.003);
+ c+=vec3(.16,.008,.04)*pow(neb,3.0)*exp(-length(p)*1.1);
+
+ c+=galaxy(p,T);
+ c+=stars(p*1.1);
+ c+=stars(p*2.3+17.0)*.45;
+
+ c+=core(p,T)*(1.-MODE*.8);
+
+ /* coração */
+ vec2 hp=p*1.35;
+ float hf=heartLine(hp);
+ float heartGlow=exp(-abs(heartField(hp))*18.0);
+ vec3 hc=vec3(1.,.025,.18)*(hf*1.5+heartGlow*.22);
+ c=mix(c,c+hc*1.65,smoothstep(0.,1.,MODE));
+
+ /* pulso */
+ float rr=abs(length(p)-(.18+ENERGY*.65));
+ c+=vec3(1.,.03,.16)*exp(-rr*70.)*ENERGY;
+
+ /* bloom simples */
+ c+=c*c*.28;
+
+ c=1.0-exp(-c*1.45);
+
+ float v=smoothstep(1.28,.15,length(p));
+ c*=mix(.24,1.0,v);
+
+ c+=(hash(gl_FragCoord.xy+T*20.)-.5)*.007;
+
+ O=vec4(c,1.);
+}
+`;
+
+function compile(type,src){
+ const s=gl.createShader(type);
+ gl.shaderSource(s,src);
+ gl.compileShader(s);
+ if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+ return s;
+}
+
+let program;
+try{
+ program=gl.createProgram();
+ gl.attachShader(program,compile(gl.VERTEX_SHADER,VS));
+ gl.attachShader(program,compile(gl.FRAGMENT_SHADER,FS));
+ gl.linkProgram(program);
+ if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+}catch(e){
+ document.body.innerHTML='<div style="color:white;padding:30px;font:15px system-ui">Erro gráfico: '+e.message+'</div>';
+ return;
+}
+
+const buffer=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
+ -1,-1,1,-1,-1,1,
+ -1,1,1,-1,1,1
+]),gl.STATIC_DRAW);
+
+gl.useProgram(program);
+const pos=gl.getAttribLocation(program,"a");
+gl.enableVertexAttribArray(pos);
+gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
+
+const U={
+ r:gl.getUniformLocation(program,"R"),
+ t:gl.getUniformLocation(program,"T"),
+ m:gl.getUniformLocation(program,"M"),
+ z:gl.getUniformLocation(program,"Z"),
+ mode:gl.getUniformLocation(program,"MODE"),
+ energy:gl.getUniformLocation(program,"ENERGY")
+};
+
+let w=1,h=1,dpr=1;
+let px=0,py=0,tx=0,ty=0;
+let zoom=1,tzoom=1;
+let mode=0,tmode=0;
+let energy=0;
+let frameCount=0,lastTime=performance.now();
+let lowQuality=false;
+
+function resize(){
+ dpr=Math.min(devicePixelRatio||1,1.35);
+
+ /* Limita a resolução interna para impedir travamento em celulares */
+ const maxPixels=innerWidth<700 ? 900000 : 1800000;
+ const raw=innerWidth*innerHeight*dpr*dpr;
+ if(raw>maxPixels){
+   dpr=Math.sqrt(maxPixels/(innerWidth*innerHeight));
+ }
+ dpr=Math.max(.65,Math.min(1.35,dpr));
+
+ w=innerWidth;
+ h=innerHeight;
+
+ canvas.width=Math.max(1,Math.floor(w*dpr));
+ canvas.height=Math.max(1,Math.floor(h*dpr));
+
+ gl.viewport(0,0,canvas.width,canvas.height);
+}
+
+resize();
+addEventListener("resize",resize,{passive:true});
+
+canvas.addEventListener("pointermove",e=>{
+ tx=(e.clientX-w/2)/(w/2);
+ ty=(e.clientY-h/2)/(h/2);
+},{passive:true});
+
+canvas.addEventListener("pointerdown",e=>{
+ tx=(e.clientX-w/2)/(w/2);
+ ty=(e.clientY-h/2)/(h/2);
+ tmode=tmode<.5?1:0;
+ energy=1;
+ canvas.setPointerCapture?.(e.pointerId);
+});
+
+canvas.addEventListener("wheel",e=>{
+ e.preventDefault();
+ tzoom=Math.max(.72,Math.min(1.3,tzoom+e.deltaY*.0007));
+},{passive:false});
+
+let pinch=null;
+canvas.addEventListener("touchstart",e=>{
+ if(e.touches.length===2){
+  pinch=Math.hypot(
+   e.touches[0].clientX-e.touches[1].clientX,
+   e.touches[0].clientY-e.touches[1].clientY
+  );
+ }
+},{passive:true});
+
+canvas.addEventListener("touchmove",e=>{
+ if(e.touches.length===2&&pinch){
+  const d=Math.hypot(
+   e.touches[0].clientX-e.touches[1].clientX,
+   e.touches[0].clientY-e.touches[1].clientY
+  );
+  tzoom=Math.max(.72,Math.min(1.3,tzoom+(d-pinch)*.002));
+  pinch=d;
+ }
+},{passive:true});
+
+canvas.addEventListener("touchend",()=>pinch=null,{passive:true});
+
+document.addEventListener("visibilitychange",()=>{
+ if(document.hidden) lastTime=performance.now();
+});
+
+function render(now){
+ const dt=Math.min(.05,(now-lastTime)/1000);
+ lastTime=now;
+
+ px+=(tx-px)*Math.min(1,dt*8);
+ py+=(ty-py)*Math.min(1,dt*8);
+ zoom+=(tzoom-zoom)*Math.min(1,dt*7);
+ mode+=(tmode-mode)*Math.min(1,dt*3);
+ energy*=Math.pow(.018,dt);
+
+ gl.useProgram(program);
+ gl.uniform2f(U.r,canvas.width,canvas.height);
+ gl.uniform1f(U.t,(now-start)/1000);
+ gl.uniform2f(U.m,px,py);
+ gl.uniform1f(U.z,zoom);
+ gl.uniform1f(U.mode,mode);
+ gl.uniform1f(U.energy,energy);
+
+ gl.drawArrays(gl.TRIANGLES,0,6);
+
+ if(gl.getError()!==gl.NO_ERROR){
+   /* Reduz a resolução caso algum GPU móvel esteja sobrecarregado */
+   if(!lowQuality){
+     lowQuality=true;
+     dpr=Math.max(.6,dpr*.72);
+     canvas.width=Math.floor(w*dpr);
+     canvas.height=Math.floor(h*dpr);
+     gl.viewport(0,0,canvas.width,canvas.height);
+   }
+ }
+
+ frameCount++;
+ if(frameCount===30) document.body.classList.add("ready");
+
+ requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
